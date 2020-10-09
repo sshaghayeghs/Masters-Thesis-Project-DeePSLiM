@@ -1,0 +1,7 @@
+numpy
+biopython
+python-Levenshtein
+scikit-learn
+matplotlib
+seaborn
+torch==1.4.0
