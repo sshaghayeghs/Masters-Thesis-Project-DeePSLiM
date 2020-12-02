@@ -1,7 +1,7 @@
 from collections import Counter
 import numpy as np, torch
 
-# This file defines the alphabet used in training and 
+# This file defines the alphabet used in training and the function used to load the input data
 
 alphabet = 'ACDEFGHIKLMNPQRSTVWY'
 
@@ -35,6 +35,3 @@ def load_data():
     
     return Seq_train, Seq_test, fam_train, fam_test, class_weights, family_set, family_counts
 
-if __name__ == "__main__":
-    Seq_train, Seq_test, fam_train, fam_test, class_weights, family_set, family_counts = load_data()
-    # TODO print some info about the data loaded

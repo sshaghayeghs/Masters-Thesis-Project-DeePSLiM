@@ -75,7 +75,7 @@ if __name__ == "__main__":
     
     device = torch.device(args.device)
     
-    grid_search_motifs(5, 6, device=device)
+    grid_search_motifs(5, 24, device=device)
 
 
 

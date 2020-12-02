@@ -77,5 +77,34 @@ def filter_sequences(parent_directory, filename, label = 'Pfam:'):
                               if fam in filtered_fam))
 
 if __name__ == "__main__":
-    filter_sequences('Uniprot', 'uniprot_sprot.dat')
+    dataset_dir = 'Uniprot'
+    if not os.path.exists(dataset_dir):
+        os.mkdir(dataset_dir)
+    
+    dataset_filename =  'uniprot_sprot.dat'
+    file_path = '{}/{}'.format(dataset_dir, dataset_filename)
+    if not os.path.exists(file_path):
+        tar_file_path = dataset_dir + '/uniprot_sprot-only2019_11.tar.gz'
+        if not os.path.exists(tar_file_path):
+            from urllib.request import urlretrieve
+            # download from:
+            link = 'ftp://ftp.uniprot.org/pub/databases/uniprot/previous_releases/release-2019_11/knowledgebase/uniprot_sprot-only2019_11.tar.gz'
+            print("Downloading dataset from {}".format(link))
+            urlretrieve(link, tar_file_path)
+
+        # unzip .dat file
+        import tarfile, gzip, shutil
+        
+        gz_filename = dataset_filename + '.gz'
+        with tarfile.open(tar_file_path, 'r:gz') as f:
+            print("Extracting dataset file")
+            f.extract(gz_filename, dataset_dir)
+            
+        gz_file_path = '{}/{}'.format(dataset_dir, gz_filename)
+        with gzip.open(gz_file_path) as f_in, open(file_path, 'wb') as f_out:
+            shutil.copyfileobj(f_in, f_out)
+        os.remove(gz_file_path)
+        
+    # ----------
+    filter_sequences(dataset_dir, dataset_filename)
 

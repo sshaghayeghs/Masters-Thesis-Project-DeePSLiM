@@ -100,6 +100,7 @@ def display_heatmaps(parent_directory, min_size = 5, max_size = 24):
     matrix_dim = max_size - min_size + 1
     metric_matrices = np.zeros((7, matrix_dim, matrix_dim))
     
+    # For convenience when setting parameters for displaying the graphs
     index_loss = row_names.index('Loss')
     index_roc  = row_names.index('AUROC')
     
@@ -119,7 +120,7 @@ def display_heatmaps(parent_directory, min_size = 5, max_size = 24):
     
     # Number of decimal places to use for each number
     num_decimals_list = [2 for _ in range(len(row_names))]
-    num_decimals_list[index_roc] = 3 # Set number of decimals to 3
+    num_decimals_list[index_roc] = 3 # Display AUROC to 3 decimal places
     
     for corr_matrix, row_name, ax, annot_size, num_decimals in zip(metric_matrices, row_names,
                                                                    axes, annot_size_list,
