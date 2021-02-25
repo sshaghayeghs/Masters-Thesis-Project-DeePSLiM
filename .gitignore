@@ -3,4 +3,4 @@
 .DS_Store
 Uniprot/
 output_motifs.meme
-
+__pycache__/
