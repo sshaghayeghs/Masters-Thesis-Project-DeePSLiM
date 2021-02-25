@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-
 import os, sys, math
 from collections import Counter
 import numpy as np, matplotlib.pyplot as plt
@@ -76,6 +75,18 @@ def filter_sequences(parent_directory, filename, label = 'Pfam:'):
                           for seq, fam in seq_fam.items()
                               if fam in filtered_fam))
 
+def display_progressbar(chunk_number, max_chunk_size, total_size):
+    if total_size > 0:
+        amount_downloaded = chunk_number * max_chunk_size
+        rows, columns = os.popen('stty size', 'r').read().split()
+        bar_length = int(columns) - 10
+
+        percent = ("{0:.1f}").format(100 * (amount_downloaded / float(total_size)))
+        filled_length = int(bar_length * amount_downloaded // total_size)
+        bar = ('#' * filled_length) + ('-' * (bar_length - filled_length))
+        print('\r |{}| {}%'.format(bar, percent),
+              end = '' if amount_downloaded < total_size else '\n')
+
 if __name__ == "__main__":
     dataset_dir = 'Uniprot'
     if not os.path.exists(dataset_dir):
@@ -90,7 +101,7 @@ if __name__ == "__main__":
             # download from:
             link = 'ftp://ftp.uniprot.org/pub/databases/uniprot/previous_releases/release-2019_11/knowledgebase/uniprot_sprot-only2019_11.tar.gz'
             print("Downloading dataset from {}".format(link))
-            urlretrieve(link, tar_file_path)
+            urlretrieve(link, tar_file_path, reporthook = display_progressbar)
 
         # unzip .dat file
         import tarfile, gzip, shutil

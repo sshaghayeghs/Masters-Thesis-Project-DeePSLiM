@@ -2,3 +2,5 @@
 *.eps
 .DS_Store
 Uniprot/
+output_motifs.meme
+

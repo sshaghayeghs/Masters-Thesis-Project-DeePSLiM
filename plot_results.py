@@ -155,7 +155,9 @@ def display_heatmaps(parent_directory, min_size = 5, max_size = 24):
     plt.close(fig)
 
 if __name__ == "__main__":
+    import argparse
     # TODO: folder location arguments. Epochs argument. Min/Max size argument
+    
     save_base_model_figures(5, 24, parent_directory='Base')
     display_heatmaps('Grid-Search', min_size=5, max_size=6)
     

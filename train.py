@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from data import load_data, alphabet
+from data import load_data, load_data_kfold, alphabet
 
 import sys, os, math, random
 from random import randrange, randint
@@ -50,7 +50,7 @@ def load_new_network_from_file(filename, *args):
     load_to_network_from_file(net, filename)
     return net
 
-def load_motif_scanner_weights(net, path):
+def load_motif_detector_weights(net, path):
     """
        This function loads only the convolution weights and biases
        into the network.
@@ -62,9 +62,9 @@ def load_motif_scanner_weights(net, path):
     import pickle
     with open(path, 'rb') as f:
         motif_weights_and_biases = pickle.load(f)
-    for scanner, (weights, biases) in zip(net.motif_scanners, motif_weights_and_biases):
-        scanner._parameters['weight'].copy_(weights)
-        scanner._parameters['bias'].copy_(biases)
+    for detector, (weights, biases) in zip(net.motif_detectors, motif_weights_and_biases):
+        detector._parameters['weight'].copy_(weights)
+        detector._parameters['bias'].copy_(biases)
         
 def preprocess_batch(batch):
     x = [one_hot(seq, len(alphabet)).float() for seq in batch]
@@ -96,7 +96,7 @@ class ProtClassifier(nn.Module):
         super().__init__(**super_kwargs)
         
         self.num_classes = num_classes
-        self.motif_scanners = nn.ModuleList([
+        self.motif_detectors = nn.ModuleList([
             nn.Conv1d(alphabet_length, num_motifs, motif_length)
             for num_motifs, motif_length in zip(num_motifs_of_len, motif_lengths)
         ])
@@ -113,12 +113,12 @@ class ProtClassifier(nn.Module):
         ])
     
     def forward(self, batch, lengths):
-        device = self.motif_scanners[0].weight.device
+        device = self.motif_detectors[0].weight.device
         # This is a length mask for the result of the scan. It's size is the maximum of
         # the output tensors of the motif evaluations. A slice of this is used to mask
         # the output so that the bias doesn't influence the results.
         mask = torch.nn.utils.rnn.pad_sequence(
-            [torch.tensor(1.0, device=device).repeat(l, max(motif.out_channels for motif in self.motif_scanners))
+            [torch.tensor(1.0, device=device).repeat(l, max(motif.out_channels for motif in self.motif_detectors))
              for l in lengths]).permute(1, 2, 0)
         motif_evals = []
         
@@ -130,7 +130,7 @@ class ProtClassifier(nn.Module):
             num   = torch.sum(x, 2)
             return num / (denom + 1), motif_presence
         
-        motif_evals = [one_motif_scan(motif, batch) for motif in self.motif_scanners]
+        motif_evals = [one_motif_scan(motif, batch) for motif in self.motif_detectors]
         presence    = [p for _, p in motif_evals]
         x = [e for e, _ in motif_evals]
         x = torch.cat(x, 1)
@@ -177,8 +177,8 @@ def fit(net, train_data, test_data,
 
     # ========
 
-    min_motif_length = net.motif_scanners[ 0].kernel_size[0]
-    max_motif_length = net.motif_scanners[-1].kernel_size[0]
+    min_motif_length = net.motif_detectors[ 0].kernel_size[0]
+    max_motif_length = net.motif_detectors[-1].kernel_size[0]
 
     if not os.path.exists(parent_directory):
         os.mkdir(parent_directory)
@@ -223,7 +223,7 @@ def fit(net, train_data, test_data,
                     classifications = np.concatenate([classifications, preds.cpu().numpy()])
 
                     num_correct += torch.sum(targets == torch.argmax(preds, 1)).item()
-                    sample_loss  = test_loss_function(preds, targets, net.motif_scanners)
+                    sample_loss  = test_loss_function(preds, targets, net.motif_detectors)
                     test_loss   += sample_loss
 
                     sys.stdout.write('\rTesting ({}/{}) loss = {:.2e}, approx accuracy = {:.2f}%         '.format(
@@ -282,7 +282,7 @@ def fit(net, train_data, test_data,
                 targets = targets.to(device)
                 optimizer.zero_grad()
                 output, presence = net(batch.to(device), lengths)
-                loss = train_loss_function(output, targets, net.motif_scanners)
+                loss = train_loss_function(output, targets, net.motif_detectors)
                 
                 loss.backward()
                 optimizer.step()
@@ -327,21 +327,23 @@ def fit(net, train_data, test_data,
            np.array(roc_auc_history), \
            np.array(mcc_history)
 
-
 # Motif Saving
 def load_net():
-    _net = ProtClassifier(len(alphabet),
-                          [5 for _ in range(5, 25)],
-                          [*range(5, 25)],
-                          len(family_set))
+    """
+    Load a version of DeePSLiM with default parameters
+    """
+    net = ProtClassifier(len(alphabet),
+                         [5 for _ in range(5, 25)],
+                         [*range(5, 25)],
+                         len(family_set))
     with torch.no_grad():
-        _net.eval()
-        # state_dict = torch.load('Base/5-24/Epoch-30.pt', map_location=torch.device('cpu'))
-        # _net.load_state_dict(state_dict)
-        load_motif_scanner_weights(_net, 'Base/5-24/motif_weights')
-    return _net
+        net.eval()
+    return net
 
 def extract_pfms(net, seqs:list, batch_size=64, device=torch.device('cpu')):
+    """
+    Extracts the position frequency matricies for each of the motifs detected in the training data.
+    """
     import pickle
     
     # Sequences
@@ -354,9 +356,8 @@ def extract_pfms(net, seqs:list, batch_size=64, device=torch.device('cpu')):
                                   collate_fn=preprocess_batch)
     
     start_batch_index = 0
-    pfm_storage = [torch.zeros((scanner.out_channels, scanner.in_channels, scanner.kernel_size[0]),
-                               device=device)
-                        for scanner in net.motif_scanners]
+    pfm_storage = [torch.zeros((detector.out_channels, detector.in_channels, detector.kernel_size[0]), device=device)
+                        for detector in net.motif_detectors]
 
     try:
         num_correct = 0
@@ -374,23 +375,30 @@ def extract_pfms(net, seqs:list, batch_size=64, device=torch.device('cpu')):
                 batch = batch.to(device)
                 preds, presence = net(batch, lengths)
                 
-                for motif_size, detection in enumerate(presence):
-                    pfm_motif_size = pfm_storage[motif_size]
+                min_size = min(detector.kernel_size[0]
+                               for detector in net.motif_detectors)
+                for motif_index, detection in enumerate(presence):
+                    motif_size = motif_index + min_size
+                    pfm_motif_size = pfm_storage[motif_index]
                     
                     # ---------------------------------------
                     x = batch.unsqueeze(2)
-                    x = F.unfold(x, (1, motif_size+5))
+                    x = F.unfold(x, (1, motif_size))
                     detection = detection.transpose(1, 2)
                     
                     conv = torch.matmul(x, detection)
                     
-                    folded = conv.view((conv.size(0), 5, 20, motif_size+5))
+                    folded = conv.view((conv.size(0), min_size,
+                                        len(alphabet), motif_size))
                     folded = torch.sum(folded, 0)
-                    pfm_storage[motif_size] += folded
+                    # print(pfm_storage, motif_size, folded.size())
                     
-                    sys.stdout.write('\r Motif: {}  {}/{}  '.format(
-                        motif_size + 5, batch_index + 1, num_test_batches))
+                    pfm_storage[motif_index] += folded
+                    
+                    sys.stdout.write('\r Saving motif of size {:3d}: {:3d}/{:3d}'.format(
+                        motif_size, batch_index + 1, num_test_batches))
                     sys.stdout.flush()
+
                 
     except KeyboardInterrupt:
         print("\nStopped by User\n")
@@ -408,12 +416,12 @@ def save_pfms_meme_format(pfms):
         for aa, bg_freq in zip(alphabet, background_freqs):
             meme.write("{} {:.6f} ".format(aa, bg_freq))
         meme.write('\n\n')
-        
-        # TODO
-        # only write after masking to those below 0.08 and
-        #   if not any(np.isnan(motif).reshape(-1))
-        
-        for motif_length, motifs in zip(range(5, 25), ppms):
+
+        motif_lengths = [ppm.size(-1) for ppm in ppms]
+        min_size = min(motif_lengths)
+        max_size = max(motif_lengths)
+
+        for motif_length, motifs in zip(range(min_size, max_size + 1), ppms):
             motif_prefix = 'letter-probability matrix: alength= {} w= {}\n'.format(len(alphabet), motif_length)
             for index, motif in enumerate(motifs):
                 meme.write('MOTIF Length{}-{}\n'.format(motif_length, index))
@@ -424,11 +432,30 @@ def save_pfms_meme_format(pfms):
             
 
 if __name__ == "__main__":
+    # x = torch.randint(0, 6, (5,))
+    # print(x.dtype)
+    # sys.exit(0)
+
     import argparse
     
     parser = argparse.ArgumentParser()
+
+    # TODO: Make sure that all of these command line options work
     parser.add_argument('--device', type=str, default='cpu',
                         help='The device to use. (ex. cpu, cuda, cuda:0, etc.)')
+    parser.add_argument('--num-folds', type=int, default=5,
+                        help='The number of folds to use in k-fold cross validation')
+    parser.add_argument('--save-location', type=str, default='Base',
+                        help='The directory that the neural network will be saved in')
+    parser.add_argument('--num-epochs', type=int, default=30,
+                        help='The number of epochs to train the network')
+    parser.add_argument('--num-motifs-of-length', type=int, default=5,
+                        help='The number of motifs of each length')
+    parser.add_argument('--min-size', type=int, default=5,
+                        help='The size of the smallest convolution filter')
+    parser.add_argument('--max-size', type=int, default=24,
+                        help='The size of the largest convolution filter')
+
     args = parser.parse_args()
     
     if args.device.split(':')[0] not in ['cpu', 'cuda']:
@@ -437,61 +464,69 @@ if __name__ == "__main__":
     
     device = torch.device(args.device)
     # preparation for training
-    Seq_train, Seq_test, fam_train, fam_test, class_weights, family_set, family_counts = load_data()
-    Seq_train = Seq_train[:1000]
-    Seq_test  = Seq_test[:100]
-    fam_train = fam_train[:1000]
-    fam_test  = fam_test[:100]
-    
-    min_motif_length, max_motif_length = 5, 24
-    motifs_per_length    = 5
+
+    min_motif_length, max_motif_length = args.min_size, args.max_size
+    motifs_per_length    = args.num_motifs_of_length
     motif_lengths        = [*range(min_motif_length, max_motif_length + 1)]
     num_motifs_of_length = [motifs_per_length for _ in motif_lengths]
-    num_epochs   = 2
-    parent_dir   = 'Base'
-    save_folder_name = '{}/{}-{}'.format(parent_dir, min_motif_length, max_motif_length)
-    motif_save_location = save_folder_name + '/motif_weights'
-    
-    _net = ProtClassifier(len(alphabet), num_motifs_of_length,
-                          motif_lengths, len(family_set))
-    
-    results = fit(_net, (Seq_train, fam_train), (Seq_test, fam_test),
-                  num_epochs=num_epochs,
-                  class_weights=class_weights,
-                  device=device, parent_directory=parent_dir)
-    
-    loss_history, accuracy_history, precision_history, recall_history, f1_score_history, roc_auc_history, mcc_history = results 
+    num_epochs   = args.num_epochs
+    parent_dir   = args.save_location
 
-    save_file_name = save_folder_name + '/Metrics'
-    with open(save_file_name + '.txt', 'w') as f:
-        f.write("Loss\n")
-        f.write(str(loss_history.tolist()))
-        f.write("\nAccuracy\n")
-        f.write(str(accuracy_history.tolist()))
-        f.write("\nPrecision\n")
-        f.write(str(precision_history.tolist()))
-        f.write("\nRecall\n")
-        f.write(str(recall_history.tolist()))
-        f.write("\nF1-Score\n")
-        f.write(str(f1_score_history.tolist()))
-        f.write("\nROC-AUC\n")
-        f.write(str(roc_auc_history.tolist()))
-        f.write("\nMCC\n")
-        f.write(str(mcc_history.tolist()))
+    kfold, sequences, families, \
+    class_weights, family_set, \
+    family_counts = load_data_kfold(args.num_folds)
+    families = torch.tensor(families)
 
-    np.save(save_file_name, np.stack((loss_history,      accuracy_history,
-                                      precision_history, recall_history,
-                                      f1_score_history,  roc_auc_history,
-                                      mcc_history)))
-    
-    # It seems like either torch.save corrupts the data or torch.load doesn't load it properly.
-    # Whatever the case, I have to do this to make sure motif scanners are saved...
-    with torch.no_grad():
-        wbs = [(m._parameters['weight'].clone().cpu(), m._parameters['bias'].clone().cpu())
-               for m in _net.motif_scanners]
-        with open(motif_save_location, 'wb') as f:
-            pickle.dump(wbs, f)
+    for kfold_enum, (train_indices, test_indices) in enumerate(kfold):
+        save_folder_name = '{}/{}-{}'.format(parent_dir, min_motif_length, max_motif_length) + str(kfold_enum)
+        motif_save_location = save_folder_name + '/motif_weights'
+
+        Seq_train = [sequences[i] for i in train_indices]
+        Seq_test  = [sequences[i] for i in  test_indices]
+        fam_train = families[train_indices]
+        fam_test  = families[test_indices]
+        _net = ProtClassifier(len(alphabet), num_motifs_of_length,
+                              motif_lengths, len(family_set))
+        
+        if False:
+            results = fit(_net, (Seq_train, fam_train), (Seq_test, fam_test),
+                          num_epochs=num_epochs,
+                          class_weights=class_weights,
+                          device=device, parent_directory=parent_dir)
             
-    pfms = extract_pfms(_net, Seq_test, device=device)
-    save_pfms_meme_format(pfms)
+            loss_history, accuracy_history, precision_history, recall_history, f1_score_history, roc_auc_history, mcc_history = results 
+
+            save_file_name = save_folder_name + '/Metrics'
+            with open(save_file_name + '.txt', 'w') as f:
+                f.write("Loss\n")
+                f.write(str(loss_history.tolist()))
+                f.write("\nAccuracy\n")
+                f.write(str(accuracy_history.tolist()))
+                f.write("\nPrecision\n")
+                f.write(str(precision_history.tolist()))
+                f.write("\nRecall\n")
+                f.write(str(recall_history.tolist()))
+                f.write("\nF1-Score\n")
+                f.write(str(f1_score_history.tolist()))
+                f.write("\nROC-AUC\n")
+                f.write(str(roc_auc_history.tolist()))
+                f.write("\nMCC\n")
+                f.write(str(mcc_history.tolist()))
+
+            np.save(save_file_name, np.stack((loss_history,
+                                              accuracy_history,
+                                              precision_history, recall_history,
+                                              f1_score_history,  roc_auc_history,
+                                              mcc_history)))
+        
+            # It seems like either torch.save corrupts the data or torch.load doesn't load it properly.
+            # Whatever the case, I have to do this to make sure motif detectors are saved...
+            with torch.no_grad():
+                wbs = [(m._parameters['weight'].clone().cpu(), m._parameters['bias'].clone().cpu())
+                       for m in _net.motif_detectors]
+                with open(motif_save_location, 'wb') as f:
+                    pickle.dump(wbs, f)
+
+        pfms = extract_pfms(_net, Seq_test, device=device)
+        save_pfms_meme_format(pfms)
 
